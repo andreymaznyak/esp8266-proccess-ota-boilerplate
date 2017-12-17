@@ -147,10 +147,24 @@ class TcpSocketProcess : public Process
             if (client.available())
             {
                 uint8_t buff[256];
+                for (int i = 0; i < 256; i++)
+                {
+                    buff[i] = 0;
+                }
                 int i = client.read((uint8_t *)&buff, 256);
                 for (int i = 0; i < 256; i++)
                 {
                     Serial.printf("%d ", buff[i]);
+                }
+                uint8_t cur = 0;
+                switch (buff[cur])
+                {
+                case SET_DIGIT_COMPLETED:
+                    sendButtonPress(buff[cur + 1]);
+                    cur += 2;
+                    break;
+                default:
+                    cur++;
                 }
                 Serial.println();
             }
