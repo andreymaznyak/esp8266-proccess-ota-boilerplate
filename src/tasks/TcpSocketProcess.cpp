@@ -20,7 +20,7 @@
  * Размер пакета 16 байт
  * | 1 байт - id сообщения | 2 - 5 байты - id aдрес | 6 байт - номер стойки | 7 - 10 байт - id чипа | 11 - 14 байт размер свободной памяти | 15 - 16 байт версия прошивки |
  * 
- * PRESS_BUTTON
+ * PRESS_BUTTON - id сообщения 2
  * Если нажата кнопка на сервер отсылается индекс нажатой кнопки
  * Размер пакета 2 байта
  * | 1 байт - id сообщения | 2 байт - данные о номере |
@@ -56,9 +56,24 @@
  * | 1 байт - id сообщения |
  * 
  **/
+
+enum CLIENT_EVENTS
+{
+    CLIENT_INFO = 1, // Событие соединения клиента с сервером
+    PRESS_BUTTON = 2 // Событие нажатия кнопки на клиенте
+};
+
+enum SERVER_EVENTS
+{
+    SET_DIGIT_COMPLETED = 3,                     // требуется утановить какой то номер как completed (что бы мигал)
+    UPDATE_ARR_NUMBERS_AND_COMPLETED_STATUS = 4, // требуется обновить номера клиентов на светодиодных табло и установить как completed (что бы мигали)
+    RESTART = 5,
+    GET_INFO = 6
+};
+
 struct ClientInfoPackage
 {
-    uint8_t messageId = 1;
+    uint8_t messageId = CLIENT_INFO;
     uint8_t ip0 = 0;
     uint8_t ip1 = 0;
     uint8_t ip2 = 0;
@@ -71,24 +86,30 @@ struct ClientInfoPackage
 
 struct PressButtonPackage
 {
-    uint8_t messageId = 2;
+    uint8_t messageId = PRESS_BUTTON;
     uint8_t pressButtonIndex = 0;
 };
 
-enum CLIENT_EVENTS
+struct GetInfoPackage
 {
-    CLIENT_INFO = 1,    // Событие соединения клиента с сервером
-    CLIENT_MESSAGE = 2, // Событие при собщении от клиента
-    PRESS_BUTTON = 3,   // Событие нажатия кнопки на клиенте
+    uint8_t messageId = GET_INFO;
 };
 
-enum SERVER_EVENTS
+struct RestartPackage
 {
-    // deprecated используйте -> UPDATE_ARR_NUMBERS_AND_COMPLETED_STATUS
-    UPDATE_ARR_NUMBERS = 1,                     // требуется обновить номера клиентов на светодиодных табло
-    SERVER_MESSAGE = 2,                         // кастомное сообщение от сервера
-    SET_DIGIT_COMPLETED = 3,                    // требуется утановить какой то номер как completed (что бы мигал)
-    UPDATE_ARR_NUMBERS_AND_COMPLETED_STATUS = 4 // требуется обновить номера клиентов на светодиодных табло и установить как completed (что бы мигали)
+    uint8_t messageId = RESTART;
+};
+
+struct UpdateNumbersPackage
+{
+    uint8_t messageId = UPDATE_ARR_NUMBERS_AND_COMPLETED_STATUS;
+    uint8_t numbers[48];
+};
+
+struct SetDigitCompletedPackage
+{
+    uint8_t messageId = SET_DIGIT_COMPLETED;
+    uint8_t index = 0;
 };
 
 /**
@@ -146,27 +167,44 @@ class TcpSocketProcess : public Process
         {
             if (client.available())
             {
-                uint8_t buff[256];
-                for (int i = 0; i < 256; i++)
+                const uint8_t BUFF_LENGTH = 128;
+                uint8_t buff[BUFF_LENGTH];
+                for (int i = 0; i < BUFF_LENGTH; i++)
                 {
                     buff[i] = 0;
                 }
-                int i = client.read((uint8_t *)&buff, 256);
-                for (int i = 0; i < 256; i++)
+                int i = client.read((uint8_t *)&buff, BUFF_LENGTH);
+                for (int i = 0; i < BUFF_LENGTH; i++)
                 {
-                    Serial.printf("%d ", buff[i]);
+                    Serial.printf("%u ", buff[i]);
                 }
                 uint8_t cur = 0;
-                switch (buff[cur])
+                while (cur < BUFF_LENGTH)
                 {
-                case SET_DIGIT_COMPLETED:
-                    sendButtonPress(buff[cur + 1]);
-                    cur += 2;
-                    break;
-                default:
-                    cur++;
+                    switch (buff[cur])
+                    {
+                    case SET_DIGIT_COMPLETED:
+                        setCompletedNumber(buff[cur + 1]);
+                        sendButtonPress(buff[cur + 1]);
+                        cur += 2;
+                        break;
+                    case GET_INFO:
+                        sendDeviceInfo();
+                        cur++;
+                        break;
+                    case RESTART:
+                        // ESP.restart();
+                        Serial.println("restart");
+                        cur++;
+                        break;
+                    case UPDATE_ARR_NUMBERS_AND_COMPLETED_STATUS:
+                        updateNumbers((void *)(buff + cur));
+                        cur += 49;
+                        break;
+                    default:
+                        cur++;
+                    }
                 }
-                Serial.println();
             }
         }
         else
@@ -199,6 +237,23 @@ class TcpSocketProcess : public Process
             delay(100);
             tcp_connected = false;
         }
+    }
+    void updateNumbers(void *buff)
+    {
+        struct UpdateNumbersPackage *info = 0;
+        info = (struct UpdateNumbersPackage *)buff;
+        Serial.printf("message id %d \n", info->messageId);
+        for (int i = 0; i < 48; i += 2)
+        {
+            bool isCompleted = (info->numbers[i]) >> 7;
+            uint16_t clientNumber = ((info->numbers[i] << 8) & ~(1 << 15)) + (info->numbers[i + 1]);
+            Serial.printf("%u-%u-%u,", i, clientNumber, isCompleted);
+        }
+    }
+    void setCompletedNumber(uint8_t index)
+    {
+        bool isCompleted = index >> 7;
+        uint8_t index = index & ~(1 << 7);
     }
     ClientInfoPackage getDeviceInfo()
     {
